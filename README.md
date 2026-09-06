@@ -242,15 +242,6 @@ IPython Notebooks для анализа данных городской игры
 
 ## 🗂 Репозитории ресурсов
 
-### [str-anger/dzr](https://github.com/str-anger/dzr)
-
-- **Язык:** Python
-- **Звёзды:** ⭐ 0
-- **Форки:** 🍴 0
-- **Последнее обновление:** 2026-05-03
-
-Утилита для dzzzr. Актуальный коммит — май 2026.
-
 ### [crbrka/dzzzr](https://github.com/crbrka/dzzzr)
 
 - **Язык:** Python
