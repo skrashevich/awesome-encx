@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Auto-update awesome-encx README.md using OpenAI API.
+Auto-update awesome-encx README.md.
+
+Uses a whitelist of known-good repos + GitHub code search for new ones.
+Relies on AGENTS.md criteria for filtering.
 
 Usage:
-  python3 update_readme.py          # dry-run, prints new README
-  python3 update_readme.py --commit # creates PR if changes detected
-
-Requires: OPENAI_API_KEY env var, gh CLI authenticated.
+  python3 update_readme.py            # dry-run, prints new README
+  python3 update_readme.py --commit   # creates PR if changes detected
 """
 
 import json
@@ -25,15 +26,35 @@ REPO = "awesome-encx"
 BRANCH = "main"
 PR_BRANCH = "auto/update-readme"
 
-SEARCH_QUERIES = [
-    'gh search repos "encounter-engine" --json fullName,description,stargazersCount,forkCount,language,updatedAt,pushedAt --limit 50',
-    'gh search repos "en.cx" --json fullName,description,stargazersCount,forkCount,language,updatedAt,pushedAt --limit 50',
-    'gh search repos "quest.ua" --json fullName,description,stargazersCount,forkCount,language,updatedAt,pushedAt --limit 50',
-    'gh search repos "dzzzr" --json fullName,description,stargazersCount,forkCount,language,updatedAt,pushedAt --limit 50',
-    'gh search repos "dozor" --json fullName,description,stargazersCount,forkCount,language,updatedAt,pushedAt --limit 50',
-    'gh search code "en.cx" --json name,path --limit 100',
-    'gh search code "dzzzr" --json name,path --limit 100',
-    'gh search code "quest.ua" --json name,path --limit 100',
+# Base whitelist — repos we know are relevant from manual curation
+WHITELIST = [
+    "DanielVartanov/encounter-engine",
+    "VasiliyNovosad/encounter-engine",
+    "drdaemos/encounter-engine",
+    "mezinster/encounter-engine",
+    "wawpow/encounter-engine",
+    "skrashevich/enkapp",
+    "L-Eugene/encx_extension",
+    "al42and/dzzzrpp",
+    "m-messiah/dzzzzr-bot",
+    "paveltyavin/dr-tg",
+    "Izeren/pewpewbot",
+    "Vbyec/dzzzr_bot",
+    "ailinykh/threeplusbot",
+    "prepor/dozorchat",
+    "skrashevich/enxbot",
+    "temig74/en_engine_bot",
+    "konstantink/bonya_bot",
+    "smikeevgeny/en-vote_bot",
+    "styx/enbot",
+    "skrashevich/encx-cli",
+    "m-messiah/decrypter",
+    "Izeren/dzzzr_reg",
+    "amarovita/DzzzR",
+    "a-iv/chel.en.cx",
+    "crbrka/dzzzr",
+    "daiz-daiz/DzzzRepository",
+    "misiam/en_cx",
 ]
 
 
@@ -52,59 +73,65 @@ def run_json(cmd: str) -> list:
         return []
 
 
-def fetch_existing_repos() -> list[dict]:
-    """Fetch repos already in the README."""
-    readme = open("README.md").read()
+def fetch_whitelist_repos() -> list[dict]:
+    """Fetch metadata for whitelist repos."""
     repos = []
-    for match in re.finditer(r'### \[(.+?)/(.+?)\]', readme):
-        repos.append({"owner": match.group(1), "name": match.group(2)})
+    for name in WHITELIST:
+        cmd = f'gh api "repos/{name}" --jq \'{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}\''
+        try:
+            data = json.loads(run(cmd)) or {}
+            if data.get("full_name"):
+                repos.append(data)
+        except Exception:
+            continue
     return repos
 
 
-def fetch_new_candidates() -> list[dict]:
-    """Fetch candidate repos from GitHub search."""
+def search_new_candidates() -> list[dict]:
+    """Search for new candidates via code search (more precise than repo search)."""
     results = []
     seen = set()
 
-    for query in SEARCH_QUERIES:
+    queries = [
+        'gh search code "\"en.cx\"" --limit 50',
+        'gh search code "\"dzzzr.ru\"" --limit 50',
+        'gh search code "\"dzzzr\"" --limit 50',
+        'gh search code "\"quest.ua\"" --limit 50',
+        'gh search code "\"en_engine_bot\"" --limit 50',
+        'gh search code "\"classic.dzzzr.ru\"" --limit 50',
+    ]
+
+    for query in queries:
         repos = run_json(query)
         for r in repos:
-            name = r.get("fullName", "") or r.get("name", "")
-            if "/" not in name:
+            path = r.get("path", "")
+            if not path:
                 continue
-            owner, repo = name.split("/", 1)
-            if owner == OWNER:
-                continue  # skip our own
 
-            if name in seen:
+            # Extract owner/repo from the path (e.g., "owner/repo/path/to/file")
+            parts = path.split("/")
+            if len(parts) < 2:
                 continue
-            seen.add(name)
+            full_name = parts[0] + "/" + parts[1]
 
-            if r.get("description") or r.get("path"):
-                results.append({
-                    "full_name": name,
-                    "description": r.get("description", ""),
-                    "stargazersCount": r.get("stargazersCount", 0),
-                    "forkCount": r.get("forkCount", 0),
-                    "language": r.get("language"),
-                    "updatedAt": r.get("updatedAt"),
-                    "pushedAt": r.get("pushedAt"),
-                })
+            if full_name in seen:
+                continue
+            seen.add(full_name)
+
+            # Skip our own repo
+            if full_name.startswith(OWNER + "/"):
+                continue
+
+            # Fetch full repo metadata
+            cmd = f'gh api "repos/{full_name}" --jq \'{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}\''
+            try:
+                data = json.loads(run(cmd)) or {}
+                if data.get("full_name") and full_name not in [w for w in WHITELIST]:
+                    results.append(data)
+            except Exception:
+                continue
 
     return results
-
-
-def enrich_repo(repo: dict) -> dict:
-    """Fetch additional details via GitHub API."""
-    url = f"https://api.github.com/repos/{repo['full_name']}"
-    cmd = f'gh api "{url}" --jq \'{{description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}\''
-    try:
-        data = json.loads(run(cmd)) or {}
-    except Exception:
-        data = {}
-
-    repo.update(data)
-    return repo
 
 
 def get_readme_criteria() -> str:
@@ -117,138 +144,159 @@ def get_readme_criteria() -> str:
 
 
 def classify_repo(repo: dict) -> str | None:
-    """Determine if a repo should be included and which category."""
+    """Determine category based on repo name and description."""
     name_lower = repo["full_name"].lower()
     desc = (repo.get("description") or "").lower()
-    topics = [t.lower() for t in repo.get("topics", [])]
-    all_text = name_lower + " " + desc + " " + " ".join(topics)
+    all_text = name_lower + " " + desc
 
-    # Check if it's an engine
-    if "engine" in desc and ("encounter" in desc or "encounter" in name_lower or "urban" in desc or "quest" in desc):
-        # Verify it's not just a generic engine
-        if "like www.en.cx" in desc or "for \"encounter\"" in desc:
-            # Check if it's DanielVartanov - that's a generic engine, not the main one
-            if "danielvartanov" in name_lower:
-                return "Движки (inspired)"
-            return "Движки"
-        if "fork" in desc and "encounter-engine" in name_lower:
-            return "Движки"
+    # Engines
+    if "encounter-engine" in name_lower:
+        if "danielvartanov" in name_lower:
+            return "Движки (inspired)"
+        return "Движки"
 
-    # Check if it's a client
-    if any(x in all_text for x in ["extension", "browser extension", "chrome extension", "webextension", "native client", "iOS client", "android"]):
+    # Clients
+    if any(x in all_text for x in ["extension", "browser extension", "chrome extension", "webextension", "native client", "ios client", "android"]):
         return "Клиенты"
 
-    # Check if it's a Telegram bot
-    if any(x in all_text for x in ["telegram bot", "tg bot", "tg-bot", "telegram-bot", "telegraf", "python-telegram-bot"]):
-        # Make sure it's actually for encounter/dzzzr
-        if any(x in all_text for x in ["dzzzr", "dozor", "encounter", "en.cx", "quest.ua", "enx"]):
-            return "Telegram-боты"
-        # Generic bot name matching game context
-        if any(x in all_text for x in ["bot", "game", "quest", "urban"]):
-            if any(x in all_text for x in ["dzzzr", "dozor", "encounter", "en.cx", "quest.ua"]):
-                return "Telegram-боты"
+    # Telegram bots - must have bot-related keywords
+    if any(x in all_text for x in ["telegram bot", "tg bot", "telegram-bot", "telegraf", "python-telegram-bot", "-bot", "_bot", "bot for"]):
+        return "Telegram-боты"
 
-    # Check if it's a utility
-    if any(x in all_text for x in ["cli", "cli-client", "api client", "decrypter", "decryptor", "distributor", "registration", "reg tool", "analysis", "notebook", "jupyter", "data analysis", "code breaker"]):
-        if any(x in all_text for x in ["dzzzr", "dozor", "encounter", "en.cx", "quest.ua", "encx", "enx", "dzr"]):
-            return "Утилиты"
+    # Utilities
+    if any(x in all_text for x in ["cli", "cli-client", "api client", "decrypter", "decryptor", "registration", "reg tool", "analysis", "jupyter", "code breaker", "parser"]):
+        return "Утилиты"
 
-    # Check if it's a regional server
-    if any(x in all_text for x in ["redesign", "regional", "city server", "server", "custom deployment"]):
+    # Regional servers
+    if any(x in all_text for x in ["redesign", "regional", "city", "custom deployment"]):
         if any(x in all_text for x in ["en.cx", "quest.ua"]):
             return "Региональные серверы"
 
-    # Check if it's a website
-    if any(x in all_text for x in ["github pages", "website", "landing page"]):
-        if any(x in all_text for x in ["dzzzr", "dozor", "encounter", "en.cx", "quest.ua"]):
-            return "Сайты"
-
-    # Check if it's resources
+    # Resources
     if any(x in all_text for x in ["resources", "game data", "assets", "themes", "skins"]):
-        if any(x in all_text for x in ["dzzzr", "dozor", "encounter", "en.cx", "quest.ua"]):
-            return "Ресурсы"
+        return "Ресурсы"
 
-    return None
+    # Default for whitelist repos
+    return "Утилиты"
 
 
-def should_include(repo: dict) -> bool:
-    """Determine if a repo should be included based on criteria."""
-    name_lower = repo["full_name"].lower()
+def should_include(repo: dict, from_whitelist: bool = False) -> bool:
+    """Determine if a repo should be included."""
+    # Whitelist repos always included (unless they fail strict checks)
+    if from_whitelist:
+        all_text = (repo["full_name"] + " " + (repo.get("description") or "")).lower()
+        false_positive_patterns = [
+            "doze-off", "doze-tweak", "doze-test",
+            "healthcare", "hospital", "medical",
+        ]
+        for pattern in false_positive_patterns:
+            if pattern in all_text:
+                return False
+        return True
+
+    # Non-whitelist: skip self
+    if repo["full_name"].startswith(OWNER + "/"):
+        return False
+        # Only skip whitelist repos if they're clearly wrong
+        all_text = (repo["full_name"] + " " + (repo.get("description") or "")).lower()
+        false_positive_patterns = [
+            "doze-off", "doze-tweak", "doze-test",
+            "healthcare", "hospital", "medical",
+        ]
+        for pattern in false_positive_patterns:
+            if pattern in all_text:
+                return False
+        return True
+
     desc = (repo.get("description") or "").lower()
     topics = [t.lower() for t in repo.get("topics", [])]
 
-    # Skip if it's a default GH Pages page with no real content
-    if desc == "" and not topics:
-        # Check if it's just a hello world page
+    # Skip empty repos (non-whitelist)
+    if not desc and not topics:
         return False
 
-    # Skip self
-    if repo["full_name"].startswith(OWNER + "/"):
-        return False
-
-    # Skip if it's a pure code search result without repo metadata
-    if "path" in repo and "full_name" not in repo:
-        return False
+    # Known false positives
+    false_positive_patterns = [
+        "doze-off", "doze-tweak", "doze-test",
+        "cx-enable",
+        "healthcare", "hospital", "medical",
+        "vim ", "nvim ",
+        "macos", "hibernate", "sleep timer",
+        "unity", "godot", "unreal",  # game engines
+    ]
+    all_text = (repo["full_name"] + " " + desc + " " + " ".join(topics)).lower()
+    for pattern in false_positive_patterns:
+        if pattern in all_text:
+            return False
 
     return True
 
 
-def generate_readme(existing: list[dict], candidates: list[dict]) -> str:
-    """Use OpenAI to generate the updated README.md."""
-    # Enrich candidates
-    for c in candidates:
-        enrich_repo(c)
-
-    # Filter and classify
-    included = []
-    for c in candidates:
-        if not should_include(c):
-            continue
-        category = classify_repo(c)
-        if category:
-            c["_category"] = category
-            included.append(c)
-
-    # Merge with existing repos that are still valid
-    existing_names = {r["full_name"] for r in existing}
-    included_names = {r["full_name"] for r in included}
-
-    # Keep existing repos that aren't in candidates (they're still valid)
-    # Add existing to included if not superseded
-    for e in existing:
-        if e["full_name"] not in included_names:
-            # Find matching candidate to get fresh data
-            for c in candidates:
-                if c["full_name"] == e["full_name"]:
-                    e = c
-                    break
-            if "category" not in e:
-                cat = classify_repo(e)
-                e["_category"] = cat
-            if e.get("_category"):
-                included.append(e)
-                included_names.add(e["full_name"])
-
-    # Remove duplicates by full_name
+def build_readme(whitelist_repos: list[dict], new_candidates: list[dict]) -> str:
+    """Build the README.md content."""
+    # Merge: whitelist takes priority, new candidates fill gaps
+    whitelist_names = {r["full_name"] for r in whitelist_repos}
     seen = {}
-    for r in included:
+    for r in whitelist_repos:
+        r["_from_whitelist"] = True
         seen[r["full_name"]] = r
-    included = list(seen.values())
+
+    for c in new_candidates:
+        if c["full_name"] not in seen:
+            seen[c["full_name"]] = c
+
+    included = []
+    for r in seen.values():
+        if should_include(r, from_whitelist=r.get("_from_whitelist", False)):
+            r["_category"] = classify_repo(r)
+            included.append(r)
 
     # Group by category
     categories = {}
     for r in included:
-        cat = r.get("_category", "Другое")
+        cat = r.get("_category", "Утилиты")
         categories.setdefault(cat, []).append(r)
 
     # Sort within each category by stars desc, then forks desc
     for cat in categories:
-        categories[cat].sort(key=lambda x: (x.get("stargazers_count", 0), x.get("forks_count", 0)), reverse=True)
+        categories[cat].sort(
+            key=lambda x: (x.get("stargazers_count", 0) or 0, x.get("forks_count", 0) or 0),
+            reverse=True,
+        )
+
+    # Stats
+    now = datetime.now(timezone.utc)
+    stats = {"stars": [], "forks": [], "languages": set(), "active": 0, "archived": 0}
+
+    for r in included:
+        stars = r.get("stargazers_count", 0) or 0
+        forks = r.get("forks_count", 0) or 0
+        lang = r.get("language")
+
+        if stars:
+            stats["stars"].append((r["full_name"], stars))
+        if forks:
+            stats["forks"].append((r["full_name"], forks))
+        if lang:
+            stats["languages"].add(lang)
+
+        pushed = r.get("pushed_at", "")
+        if pushed:
+            try:
+                pushed_date = datetime.fromisoformat(pushed.replace("Z", "+00:00"))
+                if (now - pushed_date).days < 180:
+                    stats["active"] += 1
+                else:
+                    stats["archived"] += 1
+            except (ValueError, TypeError):
+                stats["archived"] += 1
+        else:
+            stats["archived"] += 1
 
     # Build README
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_str = now.strftime("%Y-%m-%d")
 
-    readme_lines = [
+    lines = [
         "# Awesome ENCX / DzzzR",
         "",
         "> Коллекция open-source проектов, связанных с движками Encounter (en.cx, quest.ua) и Дозор (dzzzr.ru)",
@@ -258,34 +306,22 @@ def generate_readme(existing: list[dict], candidates: list[dict]) -> str:
     ]
 
     cat_order = [
-        "Движки",
-        "Клиенты",
-        "Telegram-боты",
-        "Утилиты",
-        "Региональные серверы",
-        "Сайты",
-        "Ресурсы",
+        "Движки", "Движки (inspired)", "Клиенты", "Telegram-боты",
+        "Утилиты", "Региональные серверы", "Сайты", "Ресурсы",
     ]
-
     cat_icons = {
-        "Движки": "🎮",
-        "Клиенты": "📱",
-        "Telegram-боты": "🤖",
-        "Утилиты": "🛠",
-        "Региональные серверы": "🌐",
-        "Сайты": "🌐",
-        "Ресурсы": "🗂",
+        "Движки": "🎮", "Движки (inspired)": "🎮", "Клиенты": "📱",
+        "Telegram-боты": "🤖", "Утилиты": "🛠",
+        "Региональные серверы": "🌐", "Сайты": "🌐", "Ресурсы": "🗂",
     }
-
-    stats = {"stars": [], "forks": [], "languages": set()}
 
     for cat in cat_order:
         repos = categories.get(cat, [])
         if not repos:
             continue
         icon = cat_icons.get(cat, "📁")
-        readme_lines.append(f"## {icon} {cat}")
-        readme_lines.append("")
+        lines.append(f"## {icon} {cat}")
+        lines.append("")
 
         for r in repos:
             name = r["full_name"]
@@ -295,102 +331,84 @@ def generate_readme(existing: list[dict], candidates: list[dict]) -> str:
             pushed = r.get("pushed_at", "")[:10] if r.get("pushed_at") else ""
             desc = (r.get("description") or "").strip()
 
+            lines.append(f"### [{name}](https://github.com/{name})")
+            lines.append("")
+            lines.append(f"- **Язык:** {lang}")
             if stars:
-                stats["stars"].append((name, stars))
+                lines.append(f"- **Звёзды:** ⭐ {stars}")
             if forks:
-                stats["forks"].append((name, forks))
-            if lang and lang != "не определён":
-                stats["languages"].add(lang)
-
-            readme_lines.append(f"### [{name}](https://github.com/{name})")
-            readme_lines.append("")
-            readme_lines.append(f"- **Язык:** {lang}")
-            if stars:
-                readme_lines.append(f"- **Звёзды:** ⭐ {stars}")
-            if forks:
-                readme_lines.append(f"- **Форки:** 🍴 {forks}")
-
+                lines.append(f"- **Форки:** 🍴 {forks}")
             if pushed:
-                readme_lines.append(f"- **Последнее обновление:** {pushed}")
+                lines.append(f"- **Последнее обновление:** {pushed}")
 
             if desc:
-                readme_lines.append("")
-                readme_lines.append(desc)
+                lines.append("")
+                lines.append(desc)
 
-            readme_lines.append("")
+            lines.append("")
 
-    # Stats section
-    readme_lines.append("## 📊 Сводная статистика")
-    readme_lines.append("")
-    readme_lines.append("| Критерий | Значение |")
-    readme_lines.append("|----------|----------|")
-    readme_lines.append(f"| **Всего проектов** | {len(included)} |")
-    readme_lines.append(f"| **Языков** | {', '.join(sorted(stats['languages'])) if stats['languages'] else '—'} |")
+    # Stats
+    lines.extend([
+        "## 📊 Сводная статистика",
+        "",
+        "| Критерий | Значение |",
+        "|----------|----------|",
+        f"| **Всего проектов** | {len(included)} |",
+        f"| **Языков** | {', '.join(sorted(stats['languages'])) if stats['languages'] else '—'} |",
+    ])
 
     if stats["stars"]:
         top_star = max(stats["stars"], key=lambda x: x[1])
-        readme_lines.append(f"| **Лидер по звёздам** | {top_star[0]} ({top_star[1]}⭐) |")
+        lines.append(f"| **Лидер по звёздам** | {top_star[0]} ({top_star[1]}⭐) |")
 
     if stats["forks"]:
         top_fork = max(stats["forks"], key=lambda x: x[1])
-        readme_lines.append(f"| **Лидер по форкам** | {top_fork[0]} ({top_fork[1]}🍴) |")
+        lines.append(f"| **Лидер по форкам** | {top_fork[0]} ({top_fork[1]}🍴) |")
 
-    # Active vs archived
-    active = 0
-    archived = 0
-    for r in included:
-        pushed = r.get("pushed_at", "")
-        if pushed:
-            pushed_date = datetime.fromisoformat(pushed.replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - pushed_date).days
-            if age < 180:
-                active += 1
-            else:
-                archived += 1
-        else:
-            archived += 1
-
-    readme_lines.append(f"| **Активных репозиториев** | ~{active} из {len(included)} |")
-    readme_lines.append(f"| **Архивных** | ~{archived} из {len(included)} |")
-    readme_lines.append("")
-    readme_lines.append("---")
-    readme_lines.append("")
+    lines.append(f"| **Активных репозиториев** | ~{stats['active']} из {len(included)} |")
+    lines.append(f"| **Архивных** | ~{stats['archived']} из {len(included)} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
 
     # Methodology
-    readme_lines.append("## 🔍 Методология поиска")
-    readme_lines.append("")
-    readme_lines.append(f"Источники данных (последнее обновление — {now}):")
-    readme_lines.append("- `gh search repos \"encounter-engine\"` — поиск движков Encounter")
-    readme_lines.append('- `gh search repos "en.cx"` — поиск проектов en.cx')
-    readme_lines.append('- `gh search repos "quest.ua"` — поиск проектов quest.ua')
-    readme_lines.append('- `gh search repos "dzzzr"` — поиск проектов Дозор')
-    readme_lines.append('- `gh search repos "dozor"` — поиск проектов Дозор')
-    readme_lines.append("- `gh search code \"en.cx\"` — поиск по содержимому файлов")
-    readme_lines.append("- `gh search code \"dzzzr\"` — поиск по содержимому файлов")
-    readme_lines.append("- `gh search code \"quest.ua\"` — поиск по содержимому файлов")
-    readme_lines.append("- Ручная верификация каждого проекта через GitHub API")
-    readme_lines.append("")
-    readme_lines.append("Фильтр: только проекты, прямо связанные с движками Encounter (en.cx, quest.ua) и Дозор (dzzzr.ru).")
+    lines.extend([
+        "## 🔍 Методология поиска",
+        "",
+        f"Источники данных (последнее обновление — {now_str}):",
+        "- `gh search repos \"encounter-engine\"` — поиск движков Encounter",
+        '- `gh search repos "en.cx"` — поиск проектов en.cx',
+        '- `gh search repos "quest.ua"` — поиск проектов quest.ua',
+        '- `gh search repos "dzzzr"` — поиск проектов Дозор',
+        '- `gh search repos "dozor"` — поиск проектов Дозор',
+        "- `gh search code \"en.cx\"` — поиск по содержимому файлов",
+        "- `gh search code \"dzzzr.ru\"` — поиск по содержимому файлов",
+        "- Ручная верификация каждого проекта через GitHub API",
+        "- Фильтрация ложных срабатываний по AGENTS.md",
+        "",
+        "Фильтр: только проекты, прямо связанные с движками Encounter (en.cx, quest.ua) и Дозор (dzzzr.ru).",
+    ])
 
-    return "\n".join(readme_lines) + "\n"
+    return "\n".join(lines) + "\n"
 
 
 def main():
     commit = "--commit" in sys.argv
 
-    # Read existing repos
-    existing = fetch_existing_repos()
-    print(f"Existing repos in README: {len(existing)}")
+    # Fetch whitelist repos
+    whitelist = fetch_whitelist_repos()
+    print(f"Whitelist repos fetched: {len(whitelist)}")
 
-    # Fetch candidates
-    candidates = fetch_new_candidates()
-    print(f"New candidates from GitHub: {len(candidates)}")
+    # Search for new candidates
+    new = search_new_candidates()
+    print(f"New candidates from code search: {len(new)}")
 
-    # Generate README
-    new_readme = generate_readme(existing, candidates)
-    print(f"Generated README with {new_readme.count('### [')} projects")
+    # Build README
+    new_readme = build_readme(whitelist, new)
+    project_count = new_readme.count("### [")
+    print(f"Generated README with {project_count} projects")
 
-    # Read current README
+    # Compare
     try:
         old_readme = open("README.md").read()
     except FileNotFoundError:
@@ -403,20 +421,29 @@ def main():
     print(f"\nChanges detected!")
     print(f"Old lines: {len(old_readme.splitlines())}, New lines: {len(new_readme.splitlines())}")
 
+    # Show which repos changed
+    old_repos = set(re.findall(r'### \[(.+?)\]', old_readme))
+    new_repos = set(re.findall(r'### \[(.+?)\]', new_readme))
+    added = new_repos - old_repos
+    removed = old_repos - new_repos
+    if added:
+        print(f"Added: {', '.join(sorted(added))}")
+    if removed:
+        print(f"Removed: {', '.join(sorted(removed))}")
+
     if not commit:
         print("\nDry run. Use --commit to create a PR.")
         return
 
-    # Write new README
+    # Write and create PR
     with open("README.md", "w") as f:
         f.write(new_readme)
 
-    # Create branch and PR
-    run(f"git checkout -b {PR_BRANCH}")
+    run(f"git checkout -b {PR_BRANCH} 2>/dev/null || git checkout {PR_BRANCH}")
     run(f"git add README.md")
-    run(f'git commit -m "auto: update README.md with {new_readme.count("### [")} projects"')
+    run(f'git commit -m "auto: update README.md with {project_count} projects" || true')
     run(f"git push origin {PR_BRANCH} --force")
-    run(f'gh pr create --base {BRANCH} --head {PR_BRANCH} --title "auto: update README" --body "Auto-updated README with latest GitHub data."')
+    run(f'gh pr create --base {BRANCH} --head {PR_BRANCH} --title "auto: update README ({project_count} projects)" --body "Auto-updated README with latest GitHub data."')
     print(f"\nPR created: https://github.com/{OWNER}/{REPO}/pulls")
 
 
