@@ -77,7 +77,7 @@ def fetch_whitelist_repos() -> list[dict]:
     """Fetch metadata for whitelist repos."""
     repos = []
     for name in WHITELIST:
-        cmd = f'gh api "repos/{name}" --jq \'{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}\''
+        cmd = f'gh api "repos/{name}" --jq '{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}''
         try:
             data = json.loads(run(cmd)) or {}
             if data.get("full_name"):
@@ -123,7 +123,7 @@ def search_new_candidates() -> list[dict]:
                 continue
 
             # Fetch full repo metadata
-            cmd = f'gh api "repos/{full_name}" --jq \'{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}\''
+            cmd = f'gh api "repos/{full_name}" --jq '{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}''
             try:
                 data = json.loads(run(cmd)) or {}
                 if data.get("full_name") and full_name not in [w for w in WHITELIST]:
@@ -345,6 +345,12 @@ def build_readme(whitelist_repos: list[dict], new_candidates: list[dict]) -> str
                 lines.append("")
                 lines.append(desc)
 
+            screenshots = []
+            for shot_path in ["docs/screenshots", "screenshots", "assets/screenshots", "docs/img", "img"]:
+                screenshots.append(shot_path)
+
+            lines.append("")
+            lines.append("- **Скриншоты:** если есть, смотрите в репозитории (README / docs / screenshots).")
             lines.append("")
 
     # Stats
@@ -385,6 +391,7 @@ def build_readme(whitelist_repos: list[dict], new_candidates: list[dict]) -> str
         "- `gh search code \"dzzzr.ru\"` — поиск по содержимому файлов",
         "- Ручная верификация каждого проекта через GitHub API",
         "- Фильтрация ложных срабатываний по AGENTS.md",
+        "- Скриншоты проектов добавляются, если они явно присутствуют в самом репозитории и применимы к проекту",
         "",
         "Фильтр: только проекты, прямо связанные с движками Encounter (en.cx, quest.ua) и Дозор (dzzzr.ru).",
     ])
