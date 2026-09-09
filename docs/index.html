@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Awesome ENCX / DzzzR</title>
+    <meta name="description" content="Красивый GitHub Pages-каталог open-source проектов для Encounter и DzzzR" />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__content">
+        <h1>Awesome ENCX / DzzzR</h1>
+        <p>Коллекция open-source проектов для экосистем Encounter и Дозор.</p>
+        <div class="hero__actions">
+          <a id="repo-link" class="button button--primary" href="#" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+          <a id="raw-link" class="button" href="#" target="_blank" rel="noopener noreferrer">README.md</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="toolbar">
+        <input id="search-input" type="search" placeholder="Поиск по проектам, описанию, категориям..." aria-label="Поиск" />
+        <span id="result-count"></span>
+      </section>
+
+      <section id="status" class="status">Загружаю список…</section>
+      <article id="content" class="markdown-body" hidden></article>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
