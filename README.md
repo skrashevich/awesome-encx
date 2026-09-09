@@ -1,6 +1,8 @@
 # Awesome ENCX / DzzzR
 
 > Коллекция open-source проектов, связанных с движками Encounter (en.cx, quest.ua) и Дозор (dzzzr.ru)
+>
+> 🌐 GitHub Pages: https://skrashevich.github.io/awesome-encx/
 
 ---
 
