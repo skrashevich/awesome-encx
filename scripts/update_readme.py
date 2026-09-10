@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 
@@ -25,6 +26,9 @@ OWNER = "skrashevich"
 REPO = "awesome-encx"
 BRANCH = "main"
 PR_BRANCH = "auto/update-readme"
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+SCREENSHOT_DIRS = ["screenshots", "docs/screenshots", "docs/img", "img"]
+SCREENSHOT_HINTS = ("screenshot", "screen", "preview", "demo", "ui", "interface", "скрин")
 
 # Base whitelist — repos we know are relevant from manual curation
 WHITELIST = [
@@ -73,11 +77,114 @@ def run_json(cmd: str) -> list:
         return []
 
 
+def is_image_url(url: str) -> bool:
+    parsed = urlparse(url)
+    path = parsed.path.lower()
+    return path.endswith(IMAGE_EXTENSIONS)
+
+
+def looks_like_screenshot(candidate: str) -> bool:
+    text = candidate.lower()
+    return any(hint in text for hint in SCREENSHOT_HINTS)
+
+
+def normalize_readme_image_url(target: str, full_name: str, default_branch: str) -> str:
+    target = target.strip().strip("<>")
+    if not target:
+        return ""
+    if target.startswith("http://") or target.startswith("https://"):
+        return target
+    if target.startswith("//"):
+        return f"https:{target}"
+    rel_path = target.lstrip("./")
+    return f"https://github.com/{full_name}/blob/{default_branch}/{rel_path}"
+
+
+def extract_readme_screenshots(readme: str, full_name: str, default_branch: str) -> list[tuple[str, str]]:
+    found = []
+    seen = set()
+
+    markdown_images = re.findall(r"!\[([^\]]*)\]\(([^)]+)\)", readme, flags=re.IGNORECASE)
+    for alt, raw_target in markdown_images:
+        target = raw_target.strip().split()[0]
+        if not looks_like_screenshot(f"{alt} {target}"):
+            continue
+        url = normalize_readme_image_url(target, full_name, default_branch)
+        if not url:
+            continue
+        if not is_image_url(url) and "user-images.githubusercontent.com" not in url:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        found.append((f"README: {target}", url))
+
+    html_images = re.findall(r"""<img[^>]*src=["']([^"']+)["'][^>]*>""", readme, flags=re.IGNORECASE)
+    for target in html_images:
+        if not looks_like_screenshot(target):
+            continue
+        url = normalize_readme_image_url(target, full_name, default_branch)
+        if not url:
+            continue
+        if not is_image_url(url) and "user-images.githubusercontent.com" not in url:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        found.append((f"README: {target}", url))
+
+    return found
+
+
+def detect_repo_screenshots(repo: dict) -> list[tuple[str, str]]:
+    full_name = repo["full_name"]
+    default_branch = repo.get("default_branch") or "main"
+    screenshots = []
+    seen = set()
+
+    for directory in SCREENSHOT_DIRS:
+        entries = run_json(f'gh api "repos/{full_name}/contents/{directory}"')
+        if not entries:
+            continue
+        if isinstance(entries, dict):
+            entries = [entries]
+        for entry in entries:
+            if entry.get("type") != "file":
+                continue
+            path = (entry.get("path") or "").strip()
+            if not path.lower().endswith(IMAGE_EXTENSIONS):
+                continue
+            url = (entry.get("html_url") or entry.get("download_url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            screenshots.append((path, url))
+
+    readme_url = run(f'gh api "repos/{full_name}/readme" --jq ".download_url"').strip().strip('"')
+    if readme_url:
+        try:
+            readme_md = httpx.get(readme_url, follow_redirects=True, timeout=10.0).text
+            for path, url in extract_readme_screenshots(readme_md, full_name, default_branch):
+                if url in seen:
+                    continue
+                seen.add(url)
+                screenshots.append((path, url))
+        except Exception:
+            pass
+
+    return screenshots[:4]
+
+
 def fetch_whitelist_repos() -> list[dict]:
     """Fetch metadata for whitelist repos."""
     repos = []
     for name in WHITELIST:
-        cmd = f'gh api "repos/{name}" --jq '{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}''
+        cmd = (
+            f"gh api \"repos/{name}\" --jq "
+            "'{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, "
+            "stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics, "
+            "default_branch: .default_branch}'"
+        )
         try:
             data = json.loads(run(cmd)) or {}
             if data.get("full_name"):
@@ -123,7 +230,12 @@ def search_new_candidates() -> list[dict]:
                 continue
 
             # Fetch full repo metadata
-            cmd = f'gh api "repos/{full_name}" --jq '{{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics}}''
+            cmd = (
+                f"gh api \"repos/{full_name}\" --jq "
+                "'{full_name: .full_name, description: .description, pushed_at: .pushed_at, updated_at: .updated_at, "
+                "stargazers_count: .stargazers_count, forks_count: .forks_count, language: .language, topics: .topics, "
+                "default_branch: .default_branch}'"
+            )
             try:
                 data = json.loads(run(cmd)) or {}
                 if data.get("full_name") and full_name not in [w for w in WHITELIST]:
@@ -249,6 +361,7 @@ def build_readme(whitelist_repos: list[dict], new_candidates: list[dict]) -> str
     for r in seen.values():
         if should_include(r, from_whitelist=r.get("_from_whitelist", False)):
             r["_category"] = classify_repo(r)
+            r["_screenshots"] = detect_repo_screenshots(r)
             included.append(r)
 
     # Group by category
@@ -345,13 +458,13 @@ def build_readme(whitelist_repos: list[dict], new_candidates: list[dict]) -> str
                 lines.append("")
                 lines.append(desc)
 
-            screenshots = []
-            for shot_path in ["docs/screenshots", "screenshots", "assets/screenshots", "docs/img", "img"]:
-                screenshots.append(shot_path)
-
-            lines.append("")
-            lines.append("- **Скриншоты:** если есть, смотрите в репозитории (README / docs / screenshots).")
-            lines.append("")
+            screenshots = r.get("_screenshots", [])
+            if screenshots:
+                lines.append("")
+                lines.append("- **Скриншоты:**")
+                for label, url in screenshots:
+                    lines.append(f"  - [{label}]({url})")
+                lines.append("")
 
     # Stats
     lines.extend([
